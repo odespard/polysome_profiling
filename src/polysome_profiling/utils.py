@@ -89,7 +89,7 @@ class fractionation:
 
     
 
-    def plot_profile(self, ymin, ymax, x_offset=0, y_offset=0, absorbance_column="A", include_fractions=False, label="gradient", path_to_save="temp/temp.svg", ax=None):
+    def plot(self, ymin, ymax, x_offset=0, y_offset=0, absorbance_column="A", include_fractions=False, label="gradient", path_to_save="temp/temp.svg", ax=None):
         if ax is None:
             _, ax = plt.subplots()
 
@@ -101,7 +101,7 @@ class fractionation:
                 warnings.warn(f"Fractions are plotted with an offset of 0 and will not be accurate for any x-offset profiles. Hence the fractions are not accurate for {self.name}")
             self._get_fractions()
             for i, pos in enumerate(self.fraction_positions):
-                ax.vlines(x=pos, ymin=ymin, ymax=0.1 * ymax, color="black", linestyle="-")
+                ax.vlines(x=pos, ymin=ymin, ymax=ymin + 0.1 * (ymax - ymin), color="black", linestyle="-")
             for i in range(len(self.fraction_labels_positions)):
                 ax.text(self.fraction_labels_positions[i], ymin + 0.11 * (ymax - ymin), s=self.fraction_labels_text[i], size=8, rotation=90)
         
@@ -131,8 +131,15 @@ class fractionation_set:
         if y_offsets is None:
             y_offsets = [0] * len(self.fractionation_list)
         for i, fractionation in enumerate(self.fractionation_list):
-            fractionation.plot_profile(ymin, ymax, x_offsets[i], y_offsets[i], absorbance_column, include_fractions, label=fractionation.name, ax=ax)
+            fractionation.plot(ymin, ymax, x_offsets[i], y_offsets[i], absorbance_column, include_fractions, label=fractionation.name, ax=ax)
 
+        self.plotted_wavelengths = [frac.wavelengths_in_nm[absorbance_column] for frac in self.fractionation_list]
+        if len(np.unique(self.plotted_wavelengths)) == 1:
+            ax.set_ylabel(f"Absorbance at {self.plotted_wavelengths[0]} nm")
+        else:
+            warnings.warn(f"The absorbance wavelength plotted is not the same for all samples.")
+            ax.set_ylabel(f"Absorbance {absorbance_column}")
+               
         plt.legend()
         if path_to_save is not None:
             plt.savefig(path_to_save, dpi=300, transparent=True)
