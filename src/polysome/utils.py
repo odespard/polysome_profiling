@@ -5,8 +5,6 @@ import seaborn as sns
 import scipy.optimize as opt
 import os
 import warnings
-plt.style.use("ggplot")
-plt.style.use(['plotting/profiling.mplstyle'])
 
 class fractionation:
     def __init__(self, data_path, name=None):
@@ -18,6 +16,7 @@ class fractionation:
 
     def _data_parser(self, data_path):
         reached_data = False
+        os.makedirs("temp", exist_ok=True)
         temp_data_path = "temp/temp_data.csv"
         temp_metadata_path = "temp/temp_metadata.csv"
         self.wavelengths_in_nm = {}
