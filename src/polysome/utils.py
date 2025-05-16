@@ -5,6 +5,7 @@ import seaborn as sns
 import scipy.optimize as opt
 import os
 import warnings
+from hplc.quant import Chromatogram
 
 class fractionation:
     def __init__(self, data_path, name=None):
@@ -42,6 +43,44 @@ class fractionation:
 
         return pl.read_csv(temp_data_path, null_values=["A"])
     
+    def get_peaks(self, quant_column="AbsA", approx_peak_width=150, time_window=[500, 2000], correct_baseline=True, show=False):
+        if self.data.get_column(quant_column).min() < 0:
+            warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
+            self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
+        self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
+                        cols={'time':'index', 'signal':quant_column}, 
+                        time_window=time_window)
+        
+        self.peaks = self.quant.fit_peaks(approx_peak_width=approx_peak_width, correct_baseline=correct_baseline)
+        if show:
+            self.show_peaks()
+
+    def show_peaks(self):
+        if not hasattr(self, "quant"):
+            raise ValueError("Quantification not performed. Please run get_peaks() first.")
+        self.quant.show()
+        plt.title(f"Quantification of {self.name}")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Absorbance")
+        plt.show()
+
+    def assess_fit(self):
+        if not hasattr(self, "quant"):
+            raise ValueError("Quantification not performed. Please run get_peaks() first.")
+        self.quant.assess_fit()
+
+    def get_quantification(self, peak_names=None, show=True):
+        if not hasattr(self, "peaks"):
+            raise ValueError("Quantification not performed. Please run get_peaks() first.")
+        self.peaks['normalized_area'] = self.peaks['area'] / self.peaks['area'].sum()
+        if show: 
+            ax = self.peaks['normalized_area'].plot(kind='bar', title="Met Pos", ylabel="Normalized Area", xlabel="peak_id", figsize=(10, 5))
+            if peak_names is None:
+                ax.set_xticklabels(self.peaks['peak_id'].values)
+            elif peak_names is not None:
+                ax.set_xticklabels(peak_names)
+        
+
     def _get_fractions(self):
         fraction_positions = \
         self.data[[i for 
