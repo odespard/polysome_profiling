@@ -7,6 +7,8 @@ import os
 import warnings
 from hplc.quant import Chromatogram
 
+from copy import deepcopy
+#plt.style.use('plotting/profiling')
 class fractionation:
     def __init__(self, data_path, name=None):
         self.data = self._data_parser(data_path)
@@ -69,12 +71,38 @@ class fractionation:
             raise ValueError("Quantification not performed. Please run get_peaks() first.")
         self.quant.assess_fit()
 
+    def truncate_data(self, lower=None, upper=None):
+        if not hasattr(self, "full_data"):
+            self.full_data = deepcopy(self.data)
+        if lower is None:
+            lower = 0
+        if upper is None:
+            upper = self.data.shape[0]
+        self.data = self.full_data[lower:upper, :]
+
+
+    def undo_truncation(self):
+        if not hasattr(self, "full_data"):
+            raise ValueError("No truncation has been performed. Please run truncate_data() first.")
+        self.data = deepcopy(self.full_data)
+        delattr(self, "full_data")
+
+
+    def calculate_auc_between_bounds(self, lower=None, upper=None, quant_column="AbsA"):
+
+        if lower is None:
+            lower = 0
+        if upper is None:
+            upper = self.data.shape[0]
+        
+        return self.data[lower:upper, quant_column].sum()
+
     def get_quantification(self, peak_names=None, show=True):
         if not hasattr(self, "peaks"):
             raise ValueError("Quantification not performed. Please run get_peaks() first.")
         self.peaks['normalized_area'] = self.peaks['area'] / self.peaks['area'].sum()
         if show: 
-            ax = self.peaks['normalized_area'].plot(kind='bar', title="Met Pos", ylabel="Normalized Area", xlabel="peak_id", figsize=(10, 5))
+            ax = self.peaks['normalized_area'].plot(kind='bar', title=self.name, ylabel="Normalized Area", xlabel="peak_id", figsize=(10, 5))
             if peak_names is None:
                 ax.set_xticklabels(self.peaks['peak_id'].values)
             elif peak_names is not None:
@@ -127,23 +155,34 @@ class fractionation:
 
     
 
-    def plot(self, ymin, ymax, x_offset=0, y_offset=0, absorbance_column="A", include_fractions=False, label="gradient", path_to_save="temp/temp.svg", ax=None):
+    def plot(self, ymin, ymax, x_offset=0, y_offset=0, 
+             absorbance_column="A", 
+             include_fractions=False, 
+             frac_style: str ="short",
+             label="gradient", 
+             path_to_save="temp/temp.svg", 
+             ax=None):
         if ax is None:
             _, ax = plt.subplots()
 
         yval="Abs" + absorbance_column
-        ax.plot(self.data["Position"] + x_offset, self.data[yval] + y_offset, label=label)
+        
 
         if include_fractions:
             if x_offset != 0:
                 warnings.warn(f"Fractions are plotted with an offset of 0 and will not be accurate for any x-offset profiles. Hence the fractions are not accurate for {self.name}")
             self._get_fractions()
             for i, pos in enumerate(self.fraction_positions):
-                ax.vlines(x=pos, ymin=ymin, ymax=ymin + 0.1 * (ymax - ymin), color="black", linestyle="-")
+                if frac_style == "short":
+                    ax.vlines(x=pos, ymin=ymin, ymax=ymin + 0.1 * (ymax - ymin), color="black", linestyle="-")
+                elif frac_style == "long":
+                    ax.vlines(x=pos, ymin=ymin, ymax=ymax, color="black", linestyle="--")
+                else:
+                    raise ValueError(f"Unknown fraction style {frac_style}. Use 'short' or 'long'.")
             for i in range(len(self.fraction_labels_positions)):
                 ax.text(self.fraction_labels_positions[i], ymin + 0.11 * (ymax - ymin), s=self.fraction_labels_text[i], size=8, rotation=90)
         
-
+        ax.plot(self.data["Position"] + x_offset, self.data[yval] + y_offset, label=label)
         ax.set_ylim(ymin, ymax)
         ax.set_xticks(ticks=[])
         ax.set_xticklabels("")
