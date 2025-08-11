@@ -1,7 +1,6 @@
 import polars as pl
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 import scipy.optimize as opt
 import os
 import warnings
@@ -56,7 +55,9 @@ class fractionation:
         df = df.with_columns(CumulativeVolume_ml= vols)
         return df
 
-    def create_quant(self, time_window=[2.5, 12]):
+    def create_quant(self, time_window=None):
+        if time_window is None:
+            time_window = [2.5, 12]
         self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
                         cols={'time':"CumulativeVolume_ml", 'signal':"AbsA"}, 
                         time_window=time_window)
@@ -64,11 +65,12 @@ class fractionation:
                   time_column="CumulativeVolume_ml",
                   quant_column="AbsA", 
                   approx_peak_width=1, 
-                  time_window=[2.5, 12],
+                  time_window=None,
                   known_peaks=None,
                   correct_baseline=True, 
                   show=False):
-        
+        if time_window is None:
+            time_window = [2.5, 12]
         if known_peaks is None:
             known_peaks = []
             
@@ -248,14 +250,14 @@ class fractionation_set:
             x_offsets = [0] * len(self.fractionation_list)
         if y_offsets is None:
             y_offsets = [0] * len(self.fractionation_list)
-        for i, fractionation in enumerate(self.fractionation_list):
-            fractionation.plot(ymin, ymax, x_offsets[i], y_offsets[i], absorbance_column, include_fractions, label=fractionation.name, ax=ax)
+        for i, frac in enumerate(self.fractionation_list):
+            frac.plot(ymin, ymax, x_offsets[i], y_offsets[i], absorbance_column, include_fractions, label=frac.name, ax=ax)
 
         self.plotted_wavelengths = [frac.wavelengths_in_nm[absorbance_column] for frac in self.fractionation_list]
         if len(np.unique(self.plotted_wavelengths)) == 1:
             ax.set_ylabel(f"Absorbance at {self.plotted_wavelengths[0]} nm")
         else:
-            warnings.warn(f"The absorbance wavelength plotted is not the same for all samples.")
+            warnings.warn("The absorbance wavelength plotted is not the same for all samples.")
             ax.set_ylabel(f"Absorbance {absorbance_column}")
                
         plt.legend()
