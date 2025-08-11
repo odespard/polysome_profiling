@@ -10,6 +10,13 @@ from hplc.quant import Chromatogram
 from copy import deepcopy
 #plt.style.use('plotting/profiling')
 class fractionation:
+    default_calibration_dict = {
+        '40S': {'retention_time': 3},
+        '80S': {'retention_time': 5.6},
+        '60S': {'retention_time': 4.5},
+        }
+    
+
     def __init__(self, data_path, name=None):
         self.data = self._data_parser(data_path)
         if name is None:
@@ -43,26 +50,54 @@ class fractionation:
                         if line == "Data Columns:\n":
                             reached_data = True
 
-        return pl.read_csv(temp_data_path, null_values=["A"])
-    
-    def get_peaks(self, quant_column="AbsA", approx_peak_width=150, time_window=[500, 2000], correct_baseline=True, show=False):
+        df = pl.read_csv(temp_data_path, null_values=["A"])
+        approx_vol_per_row = df['FractionVolume(ml)'].sum()/ df.shape[0]
+        vols = np.arange(df.shape[0]) * approx_vol_per_row
+        df = df.with_columns(CumulativeVolume_ml= vols)
+        return df
+
+    def create_quant(self, time_window=[2.5, 12]):
+        self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
+                        cols={'time':"CumulativeVolume_ml", 'signal':"AbsA"}, 
+                        time_window=time_window)
+    def get_peaks(self, 
+                  time_column="CumulativeVolume_ml",
+                  quant_column="AbsA", 
+                  approx_peak_width=1, 
+                  time_window=[2.5, 12],
+                  known_peaks=None,
+                  correct_baseline=True, 
+                  show=False):
+        
+        if known_peaks is None:
+            known_peaks = []
+            
         if self.data.get_column(quant_column).min() < 0:
             warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
             self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
         self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
-                        cols={'time':'index', 'signal':quant_column}, 
+                        cols={'time':time_column, 'signal':quant_column}, 
                         time_window=time_window)
         
-        self.peaks = self.quant.fit_peaks(approx_peak_width=approx_peak_width, correct_baseline=correct_baseline)
+        self.peaks = self.quant.fit_peaks(
+            approx_peak_width=approx_peak_width, 
+            known_peaks=known_peaks,
+            correct_baseline=correct_baseline)
+        
         if show:
             self.show_peaks()
+
+    def map_peaks(self, calibration_dict=None, loc_tolerance=0.2):
+        if calibration_dict is None:
+            calibration_dict = self.default_calibration_dict
+        return self.quant.map_peaks(calibration_dict, loc_tolerance)
 
     def show_peaks(self):
         if not hasattr(self, "quant"):
             raise ValueError("Quantification not performed. Please run get_peaks() first.")
         self.quant.show()
         plt.title(f"Quantification of {self.name}")
-        plt.xlabel("Time (s)")
+        plt.xlabel("Cumulative Volume / mL")
         plt.ylabel("Absorbance")
         plt.show()
 
@@ -114,7 +149,7 @@ class fractionation:
         self.data[[i for 
                     i, val in enumerate(self.data.get_column("FractionNumber")) 
                     if val is not None], 
-                    "Position"].to_list()
+                    "CumulativeVolume_ml"].to_list()
         fraction_positions = [0] + fraction_positions
 
         self.fraction_labels_positions = np.diff(fraction_positions) / 3 + fraction_positions[:-1]
@@ -155,12 +190,15 @@ class fractionation:
 
     
 
-    def plot(self, ymin, ymax, x_offset=0, y_offset=0, 
+    def plot(self, ymin, ymax, 
+             x_offset=0, 
+             y_offset=0, 
              absorbance_column="A", 
              include_fractions=False, 
              frac_style: str ="short",
              label="gradient", 
              path_to_save="temp/temp.svg", 
+             show_x_axis=True,
              ax=None):
         if ax is None:
             _, ax = plt.subplots()
@@ -181,12 +219,15 @@ class fractionation:
                     raise ValueError(f"Unknown fraction style {frac_style}. Use 'short' or 'long'.")
             for i in range(len(self.fraction_labels_positions)):
                 ax.text(self.fraction_labels_positions[i], ymin + 0.11 * (ymax - ymin), s=self.fraction_labels_text[i], size=8, rotation=90)
-        
-        ax.plot(self.data["Position"] + x_offset, self.data[yval] + y_offset, label=label)
+
+        ax.plot(self.data["CumulativeVolume_ml"] + x_offset, self.data[yval] + y_offset, label=label)
         ax.set_ylim(ymin, ymax)
-        ax.set_xticks(ticks=[])
-        ax.set_xticklabels("")
-        ax.set_xlabel("")
+        if show_x_axis is False:
+            ax.set_xticks(ticks=[])
+            ax.set_xticklabels("")
+        
+        else:
+            ax.set_xlabel("Volume / µl")
         ax.set_ylabel(f"Absorbance at {self.wavelengths_in_nm[absorbance_column]} nm")
         if path_to_save is not None:
             plt.savefig(path_to_save, dpi=300, transparent=True)
