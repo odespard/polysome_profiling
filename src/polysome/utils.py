@@ -16,14 +16,14 @@ class fractionation:
         }
     
 
-    def __init__(self, data_path, name=None):
-        self.data = self._data_parser(data_path)
+    def __init__(self, data_path, name=None, express_in_volume_units=True):
+        self.data = self._data_parser(data_path, express_in_volume_units=express_in_volume_units)
         if name is None:
             name = data_path.split("/")[-1].split(".")[0]
         
         self.name = name
 
-    def _data_parser(self, data_path):
+    def _data_parser(self, data_path, express_in_volume_units=True):
         reached_data = False
         os.makedirs("temp", exist_ok=True)
         temp_data_path = "temp/temp_data.csv"
@@ -50,9 +50,11 @@ class fractionation:
                             reached_data = True
 
         df = pl.read_csv(temp_data_path, null_values=["A"])
-        approx_vol_per_row = df['FractionVolume(ml)'].sum()/ df.shape[0]
-        vols = np.arange(df.shape[0]) * approx_vol_per_row
-        df = df.with_columns(CumulativeVolume_ml= vols)
+
+        if express_in_volume_units is True:
+            approx_vol_per_row = df['FractionVolume(ml)'].cast(pl.Float32).sum()/ df.shape[0]
+            vols = np.arange(df.shape[0]) * approx_vol_per_row
+            df = df.with_columns(CumulativeVolume_ml= vols)
         return df
 
     def create_quant(self, time_window=None):
