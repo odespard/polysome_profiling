@@ -58,9 +58,9 @@ class fractionation:
             vols = np.arange(df.shape[0]) * approx_vol_per_row
             df = df.with_columns(CumulativeVolume_ml= vols)
 
-        if self.data.get_column(quant_column).min() < 0:
+        if df.get_column(quant_column).min() < 0:
             warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
-            self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
+            df = df.with_columns(df.get_column(quant_column) - df.get_column(quant_column).min())
 
         return df
 
