@@ -57,11 +57,16 @@ class fractionation:
             df = df.with_columns(CumulativeVolume_ml= vols)
         return df
 
-    def create_quant(self, time_window=None):
+    def create_quant(self, time_window=None, quant_column="AbsA"):
         if time_window is None:
             time_window = [2.5, 12]
+            
+        if self.data.get_column(quant_column).min() < 0:
+            warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
+            self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
+
         self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
-                        cols={'time':"CumulativeVolume_ml", 'signal':"AbsA"}, 
+                        cols={'time':"CumulativeVolume_ml", 'signal':quant_column}, 
                         time_window=time_window)
     def get_peaks(self, 
                   time_column="CumulativeVolume_ml",
