@@ -132,9 +132,9 @@ class fractionation:
         if lower is None:
             lower = 0
         if upper is None:
-            upper = self.data.shape[0]
-        
-        return self.data[lower:upper, quant_column].sum()
+            upper = self.data.select(pl.col("CumulativeVolume_ml")).max().item()
+
+        return self.data.filter((pl.col('CumulativeVolume_ml') < upper) & (pl.col('CumulativeVolume_ml') > lower))[quant_column].sum()
 
     def get_quantification(self, peak_names=None, show=True):
         if not hasattr(self, "peaks"):
