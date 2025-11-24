@@ -16,14 +16,50 @@ class fractionation:
         }
     
 
-    def __init__(self, data_path, name=None, express_in_volume_units=True):
-        self.data = self._data_parser(data_path, express_in_volume_units=express_in_volume_units)
+    def __init__(self, 
+                 data_path, 
+                 name=None, 
+                 quant_column: str="AbsA",
+                 express_in_volume_units=True, 
+                 correct_baseline=False,
+                 time_window: list[float] | None =None,
+                 window: int | None =None):
+        self.data = self._data_parser(data_path, 
+                                      express_in_volume_units=express_in_volume_units
+                                      )
+        
+        if self.data.get_column(quant_column).min() < 0: # type: ignore
+            warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
+            self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
+
+
+        if correct_baseline:
+            if time_window is None:
+                time_window = [2.5, 12]
+            if window is None:
+                window=5
+
+            cumulative_volume_ml = self.data.filter((pl.col('CumulativeVolume_ml') < time_window[1]) & (pl.col('CumulativeVolume_ml') > time_window[0]))["CumulativeVolume_ml"]
+            self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
+                            cols={'time':"CumulativeVolume_ml", 'signal': quant_column}, 
+                            time_window=time_window) # type: ignore
+            
+            corrected_quant_column = self.quant.correct_baseline(return_df=True, window=window)[quant_column + "_corrected"] # type: ignore
+            self.corrected_col_df = pl.DataFrame({
+                "CumulativeVolume_ml": cumulative_volume_ml,
+                quant_column + "_corrected": corrected_quant_column
+            })
+            self.data = self.data.join(
+                self.corrected_col_df, on="CumulativeVolume_ml", how="left"
+            )
+
         if name is None:
             name = data_path.split("/")[-1].split(".")[0]
         
         self.name = name
 
-    def _data_parser(self, data_path, quant_column="AbsA", express_in_volume_units=True):
+    def _data_parser(self, data_path, 
+                     express_in_volume_units=True, ):
         reached_data = False
         os.makedirs("temp", exist_ok=True)
         temp_data_path = "temp/temp_data.csv"
@@ -43,9 +79,9 @@ class fractionation:
                     with open(temp_metadata_path, 'a') as temp:
                         temp.write(line)
                         if line.startswith("Channel A (LED1) Wavelength:"):
-                            self.wavelengths_in_nm["A"] = line.split(":")[1].replace("nm", "").replace("\n", "").replace(" ", "")
+                            self.wavelengths_in_nm["AbsA"] = line.split(":")[1].replace("nm", "").replace("\n", "").replace(" ", "")
                         if line.startswith("Channel B (LED2) Wavelength:"):
-                            self.wavelengths_in_nm["B"] = line.split(":")[1].replace("nm", "").replace("\n", "").replace(" ", "")
+                            self.wavelengths_in_nm["AbsB"] = line.split(":")[1].replace("nm", "").replace("\n", "").replace(" ", "")
                         if line == "Data Columns:\n":
                             reached_data = True
 
@@ -56,11 +92,8 @@ class fractionation:
 
             self.approx_volume_per_row = approx_vol_per_row
             vols = np.arange(df.shape[0]) * approx_vol_per_row
-            df = df.with_columns(CumulativeVolume_ml= vols)
+            df = df.with_columns(CumulativeVolume_ml= vols) # type: ignore
 
-        if df.get_column(quant_column).min() < 0:
-            warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
-            df = df.with_columns(df.get_column(quant_column) - df.get_column(quant_column).min())
 
         return df
 
@@ -68,13 +101,15 @@ class fractionation:
         if time_window is None:
             time_window = [2.5, 12]
 
-        if self.data.get_column(quant_column).min() < 0:
+        if self.data.get_column(quant_column).min() < 0: # type: ignore
             warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
             self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
 
         self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
-                        cols={'time':"CumulativeVolume_ml", 'signal':quant_column}, 
-                        time_window=time_window)
+                        cols={'time':"CumulativeVolume_ml", 'signal': quant_column}, 
+                        time_window=time_window) # type: ignore
+        
+
     def get_peaks(self, 
                   time_column="CumulativeVolume_ml",
                   quant_column="AbsA", 
@@ -206,20 +241,22 @@ class fractionation:
 
     
 
-    def plot(self, ymin, ymax, 
+    def plot(self, ymin=0, ymax=1, 
              x_offset=0, 
              y_offset=0, 
-             absorbance_column="A", 
+             absorbance_column="AbsA", 
+             wavelength=None,
              include_fractions=False, 
              frac_style: str ="short",
              label="gradient", 
              path_to_save="temp/temp.svg", 
              show_x_axis=True,
+             multiply_by=1,
              ax=None):
         if ax is None:
             _, ax = plt.subplots()
 
-        yval="Abs" + absorbance_column
+         
         
 
         if include_fractions:
@@ -236,15 +273,20 @@ class fractionation:
             for i in range(len(self.fraction_labels_positions)):
                 ax.text(self.fraction_labels_positions[i], ymin + 0.11 * (ymax - ymin), s=self.fraction_labels_text[i], size=8, rotation=90)
 
-        ax.plot(self.data["CumulativeVolume_ml"] + x_offset, self.data[yval] + y_offset, label=label)
+        ax.plot(self.data["CumulativeVolume_ml"] + x_offset, self.data[absorbance_column] * multiply_by + y_offset, label=label)
         ax.set_ylim(ymin, ymax)
         if show_x_axis is False:
             ax.set_xticks(ticks=[])
             ax.set_xticklabels("")
         
         else:
-            ax.set_xlabel("Volume / µl")
-        ax.set_ylabel(f"Absorbance at {self.wavelengths_in_nm[absorbance_column]} nm")
+            ax.set_xlabel("Volume / ml")
+        
+        if wavelength is None:
+            if absorbance_column in self.wavelengths_in_nm:
+                ax.set_ylabel(f"Absorbance at {self.wavelengths_in_nm[absorbance_column]} nm")
+        else:
+            ax.set_ylabel(f"Absorbance at {wavelength} nm")
         if path_to_save is not None:
             plt.savefig(path_to_save, dpi=300, transparent=True)
         if ax is None:
