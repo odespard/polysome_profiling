@@ -82,7 +82,7 @@ class fractionation:
                             self.wavelengths_in_nm["AbsA"] = line.split(":")[1].replace("nm", "").replace("\n", "").replace(" ", "")
                         if line.startswith("Channel B (LED2) Wavelength:"):
                             self.wavelengths_in_nm["AbsB"] = line.split(":")[1].replace("nm", "").replace("\n", "").replace(" ", "")
-                        if line == "Data Columns:\n":
+                        if line.startswith("Data Columns:"):
                             reached_data = True
 
         df = pl.read_csv(temp_data_path, null_values=["A"])
@@ -97,7 +97,7 @@ class fractionation:
 
         return df
 
-    def create_quant(self, time_window=None, quant_column="AbsA"):
+    def create_quant(self, time_window=None, quant_column="AbsA", time_col="CumulativeVolume_ml"):
         if time_window is None:
             time_window = [2.5, 12]
 
@@ -106,7 +106,7 @@ class fractionation:
             self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
 
         self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
-                        cols={'time':"CumulativeVolume_ml", 'signal': quant_column}, 
+                        cols={'time':time_col, 'signal': quant_column}, 
                         time_window=time_window) # type: ignore
         
 
