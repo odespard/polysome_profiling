@@ -83,17 +83,18 @@ class PolysomeProfileWithProteins:
     def extent(self):
         return [0, self.frac_data.CumulativeVolume_ml.max(), 0, self.qfeatures.abundances.shape[0]]
 
-    def make_heatmap(self, row_condition: None | str = None, inplace: bool = False):
+    def make_heatmap(self, row_condition: None | str = None, inplace: bool = False,):
         if row_condition is  None:
             qfeatures_for_heatmap = self.qfeatures
         else:
             qfeatures_for_heatmap = self.qfeatures.filter_rows(row_condition=row_condition)
         heatmap = np.zeros((qfeatures_for_heatmap.abundances.shape[0], self.frac_data.shape[0]))
+
         for col_ind, col in enumerate(qfeatures_for_heatmap.col_info.itertuples()):
             fractions = col.Fractions
             fraction_region = self.frac_data.loc[self.frac_data.FilledInFractionNumber.isin(fractions)].index.tolist()
             for row_ind, val in enumerate(qfeatures_for_heatmap.abundances.iloc[:, col_ind]):
-                heatmap[row_ind, fraction_region] += val / len(fractions)
+                heatmap[row_ind, fraction_region] += val / len(fractions) if val is not np.nan else 0
             
         extent = [0, self.frac_data.CumulativeVolume_ml.max(), 0, qfeatures_for_heatmap.abundances.shape[0]]
         

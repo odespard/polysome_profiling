@@ -22,6 +22,7 @@ class fractionation:
                  quant_column: str="AbsA",
                  express_in_volume_units=True, 
                  correct_baseline=False,
+                 set_minimum_to_zero=False,
                  time_window: list[float] | None =None,
                  window: int | None =None):
         self.data = self._data_parser(data_path, 
@@ -30,6 +31,10 @@ class fractionation:
         
         if self.data.get_column(quant_column).min() < 0: # type: ignore
             warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
+            self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
+
+        if set_minimum_to_zero:
+            warnings.warn(f"Setting {quant_column} column to have minimum zero by subtracting the minimum value.")
             self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
 
 
