@@ -1,20 +1,70 @@
 import polars as pl
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 import scipy.optimize as opt
 import os
 import warnings
+from hplc.quant import Chromatogram
 
+from copy import deepcopy
+#plt.style.use('plotting/profiling')
 class fractionation:
-    def __init__(self, data_path, name=None):
-        self.data = self._data_parser(data_path)
+    default_calibration_dict = {
+        '40S': {'retention_time': 3},
+        '80S': {'retention_time': 5.6},
+        '60S': {'retention_time': 4.5},
+        }
+    
+
+    def __init__(self, 
+                 data_path, 
+                 name=None, 
+                 quant_column: str="AbsA",
+                 express_in_volume_units=True, 
+                 correct_baseline=False,
+                 set_minimum_to_zero=False,
+                 time_window: list[float] | None =None,
+                 window: int | None =None):
+        self.data = self._data_parser(data_path, 
+                                      express_in_volume_units=express_in_volume_units
+                                      )
+        
+        if self.data.get_column(quant_column).min() < 0: # type: ignore
+            warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
+            self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
+
+        if set_minimum_to_zero:
+            warnings.warn(f"Setting {quant_column} column to have minimum zero by subtracting the minimum value.")
+            self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
+
+
+        if correct_baseline:
+            if time_window is None:
+                time_window = [2.5, 12]
+            if window is None:
+                window=5
+
+            cumulative_volume_ml = self.data.filter((pl.col('CumulativeVolume_ml') < time_window[1]) & (pl.col('CumulativeVolume_ml') > time_window[0]))["CumulativeVolume_ml"]
+            self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
+                            cols={'time':"CumulativeVolume_ml", 'signal': quant_column}, 
+                            time_window=time_window) # type: ignore
+            
+            corrected_quant_column = self.quant.correct_baseline(return_df=True, window=window)[quant_column + "_corrected"] # type: ignore
+            self.corrected_col_df = pl.DataFrame({
+                "CumulativeVolume_ml": cumulative_volume_ml,
+                quant_column + "_corrected": corrected_quant_column
+            })
+            self.data = self.data.join(
+                self.corrected_col_df, on="CumulativeVolume_ml", how="left"
+            )
+
         if name is None:
             name = data_path.split("/")[-1].split(".")[0]
         
         self.name = name
 
-    def _data_parser(self, data_path):
+    def _data_parser(self, data_path, 
+                     express_in_volume_units=True, ):
         reached_data = False
         os.makedirs("temp", exist_ok=True)
         temp_data_path = "temp/temp_data.csv"
@@ -34,20 +84,128 @@ class fractionation:
                     with open(temp_metadata_path, 'a') as temp:
                         temp.write(line)
                         if line.startswith("Channel A (LED1) Wavelength:"):
-                            self.wavelengths_in_nm["A"] = line.split(":")[1].replace("nm", "").replace("\n", "").replace(" ", "")
+                            self.wavelengths_in_nm["AbsA"] = line.split(":")[1].replace("nm", "").replace("\n", "").replace(" ", "")
                         if line.startswith("Channel B (LED2) Wavelength:"):
-                            self.wavelengths_in_nm["B"] = line.split(":")[1].replace("nm", "").replace("\n", "").replace(" ", "")
-                        if line == "Data Columns:\n":
+                            self.wavelengths_in_nm["AbsB"] = line.split(":")[1].replace("nm", "").replace("\n", "").replace(" ", "")
+                        if line.startswith("Data Columns:"):
                             reached_data = True
 
-        return pl.read_csv(temp_data_path, null_values=["A"])
-    
+        df = pl.read_csv(temp_data_path, null_values=["A"])
+
+        if express_in_volume_units is True:
+            approx_vol_per_row = df['FractionVolume(ml)'].cast(pl.Float32).sum()/ df.shape[0]
+
+            self.approx_volume_per_row = approx_vol_per_row
+            vols = np.arange(df.shape[0]) * approx_vol_per_row
+            df = df.with_columns(CumulativeVolume_ml= vols) # type: ignore
+
+
+        return df
+
+    def create_quant(self, time_window=None, quant_column="AbsA", time_col="CumulativeVolume_ml"):
+        if time_window is None:
+            time_window = [2.5, 12]
+
+        if self.data.get_column(quant_column).min() < 0: # type: ignore
+            warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
+            self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
+
+        self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
+                        cols={'time':time_col, 'signal': quant_column}, 
+                        time_window=time_window) # type: ignore
+        
+
+    def get_peaks(self, 
+                  time_column="CumulativeVolume_ml",
+                  quant_column="AbsA", 
+                  approx_peak_width=1, 
+                  time_window=None,
+                  known_peaks=None,
+                  correct_baseline=True, 
+                  show=False):
+        if time_window is None:
+            time_window = [2.5, 12]
+        if known_peaks is None:
+            known_peaks = []
+            
+        if self.data.get_column(quant_column).min() < 0:
+            warnings.warn(f"Negative values in {quant_column} column. Changing this to zero by subtracting the minimum value.")
+            self.data = self.data.with_columns(self.data.get_column(quant_column) - self.data.get_column(quant_column).min())
+        self.quant = Chromatogram(self.data.to_pandas().reset_index(), 
+                        cols={'time':time_column, 'signal':quant_column}, 
+                        time_window=time_window)
+        
+        self.peaks = self.quant.fit_peaks(
+            approx_peak_width=approx_peak_width, 
+            known_peaks=known_peaks,
+            correct_baseline=correct_baseline)
+        
+        if show:
+            self.show_peaks()
+
+    def map_peaks(self, calibration_dict=None, loc_tolerance=0.2):
+        if calibration_dict is None:
+            calibration_dict = self.default_calibration_dict
+        return self.quant.map_peaks(calibration_dict, loc_tolerance)
+
+    def show_peaks(self):
+        if not hasattr(self, "quant"):
+            raise ValueError("Quantification not performed. Please run get_peaks() first.")
+        self.quant.show()
+        plt.title(f"Quantification of {self.name}")
+        plt.xlabel("Cumulative Volume / mL")
+        plt.ylabel("Absorbance")
+        plt.show()
+
+    def assess_fit(self):
+        if not hasattr(self, "quant"):
+            raise ValueError("Quantification not performed. Please run get_peaks() first.")
+        self.quant.assess_fit()
+
+    def truncate_data(self, lower=None, upper=None):
+        if not hasattr(self, "full_data"):
+            self.full_data = deepcopy(self.data)
+        if lower is None:
+            lower = 0
+        if upper is None:
+            upper = self.data.shape[0]
+        self.data = self.full_data[lower:upper, :]
+
+
+    def undo_truncation(self):
+        if not hasattr(self, "full_data"):
+            raise ValueError("No truncation has been performed. Please run truncate_data() first.")
+        self.data = deepcopy(self.full_data)
+        delattr(self, "full_data")
+
+
+    def calculate_auc_between_bounds(self, lower=None, upper=None, quant_column="AbsA"):
+
+        if lower is None:
+            lower = 0
+        if upper is None:
+            upper = self.data.select(pl.col("CumulativeVolume_ml")).max().item()
+
+        return self.data.filter((pl.col('CumulativeVolume_ml') < upper) & (pl.col('CumulativeVolume_ml') > lower))[quant_column].sum() * self.approx_volume_per_row 
+
+    def get_quantification(self, peak_names=None, show=True):
+        if not hasattr(self, "peaks"):
+            raise ValueError("Quantification not performed. Please run get_peaks() first.")
+        self.peaks['normalized_area'] = self.peaks['area'] / self.peaks['area'].sum()
+        if show: 
+            ax = self.peaks['normalized_area'].plot(kind='bar', title=self.name, ylabel="Normalized Area", xlabel="peak_id", figsize=(10, 5))
+            if peak_names is None:
+                ax.set_xticklabels(self.peaks['peak_id'].values)
+            elif peak_names is not None:
+                ax.set_xticklabels(peak_names)
+        
+
     def _get_fractions(self):
         fraction_positions = \
         self.data[[i for 
                     i, val in enumerate(self.data.get_column("FractionNumber")) 
                     if val is not None], 
-                    "Position"].to_list()
+                    "CumulativeVolume_ml"].to_list()
         fraction_positions = [0] + fraction_positions
 
         self.fraction_labels_positions = np.diff(fraction_positions) / 3 + fraction_positions[:-1]
@@ -88,28 +246,52 @@ class fractionation:
 
     
 
-    def plot(self, ymin, ymax, x_offset=0, y_offset=0, absorbance_column="A", include_fractions=False, label="gradient", path_to_save="temp/temp.svg", ax=None):
+    def plot(self, ymin=0, ymax=1, 
+             x_offset=0, 
+             y_offset=0, 
+             absorbance_column="AbsA", 
+             wavelength=None,
+             include_fractions=False, 
+             frac_style: str ="short",
+             label="gradient", 
+             path_to_save="temp/temp.svg", 
+             show_x_axis=True,
+             multiply_by=1,
+             ax=None):
         if ax is None:
             _, ax = plt.subplots()
 
-        yval="Abs" + absorbance_column
-        ax.plot(self.data["Position"] + x_offset, self.data[yval] + y_offset, label=label)
+         
+        
 
         if include_fractions:
             if x_offset != 0:
                 warnings.warn(f"Fractions are plotted with an offset of 0 and will not be accurate for any x-offset profiles. Hence the fractions are not accurate for {self.name}")
             self._get_fractions()
             for i, pos in enumerate(self.fraction_positions):
-                ax.vlines(x=pos, ymin=ymin, ymax=ymin + 0.1 * (ymax - ymin), color="black", linestyle="-")
+                if frac_style == "short":
+                    ax.vlines(x=pos, ymin=ymin, ymax=ymin + 0.1 * (ymax - ymin), color="black", linestyle="-")
+                elif frac_style == "long":
+                    ax.vlines(x=pos, ymin=ymin, ymax=ymax, color="black", linestyle="--")
+                else:
+                    raise ValueError(f"Unknown fraction style {frac_style}. Use 'short' or 'long'.")
             for i in range(len(self.fraction_labels_positions)):
                 ax.text(self.fraction_labels_positions[i], ymin + 0.11 * (ymax - ymin), s=self.fraction_labels_text[i], size=8, rotation=90)
-        
 
+        ax.plot(self.data["CumulativeVolume_ml"] + x_offset, self.data[absorbance_column] * multiply_by + y_offset, label=label)
         ax.set_ylim(ymin, ymax)
-        ax.set_xticks(ticks=[])
-        ax.set_xticklabels("")
-        ax.set_xlabel("")
-        ax.set_ylabel(f"Absorbance at {self.wavelengths_in_nm[absorbance_column]} nm")
+        if show_x_axis is False:
+            ax.set_xticks(ticks=[])
+            ax.set_xticklabels("")
+        
+        else:
+            ax.set_xlabel("Volume / ml")
+        
+        if wavelength is None:
+            if absorbance_column in self.wavelengths_in_nm:
+                ax.set_ylabel(f"Absorbance at {self.wavelengths_in_nm[absorbance_column]} nm")
+        else:
+            ax.set_ylabel(f"Absorbance at {wavelength} nm")
         if path_to_save is not None:
             plt.savefig(path_to_save, dpi=300, transparent=True)
         if ax is None:
@@ -129,14 +311,14 @@ class fractionation_set:
             x_offsets = [0] * len(self.fractionation_list)
         if y_offsets is None:
             y_offsets = [0] * len(self.fractionation_list)
-        for i, fractionation in enumerate(self.fractionation_list):
-            fractionation.plot(ymin, ymax, x_offsets[i], y_offsets[i], absorbance_column, include_fractions, label=fractionation.name, ax=ax)
+        for i, frac in enumerate(self.fractionation_list):
+            frac.plot(ymin, ymax, x_offsets[i], y_offsets[i], absorbance_column, include_fractions, label=frac.name, ax=ax)
 
         self.plotted_wavelengths = [frac.wavelengths_in_nm[absorbance_column] for frac in self.fractionation_list]
         if len(np.unique(self.plotted_wavelengths)) == 1:
             ax.set_ylabel(f"Absorbance at {self.plotted_wavelengths[0]} nm")
         else:
-            warnings.warn(f"The absorbance wavelength plotted is not the same for all samples.")
+            warnings.warn("The absorbance wavelength plotted is not the same for all samples.")
             ax.set_ylabel(f"Absorbance {absorbance_column}")
                
         plt.legend()
